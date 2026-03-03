@@ -3,6 +3,8 @@
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
+import os
+import diskcache
 
 from ..core.interfaces import ModelRegistry, ModelSelection
 from ..core.models import (
@@ -54,7 +56,12 @@ class CostOptimizer:
             model_registry: Registry of available models with capabilities and costs
         """
         self.model_registry = model_registry
-        self._optimization_cache: Dict[str, CostOptimizationResult] = {}
+        
+        # Initialize persistent cache with 100MB LRU limit
+        cache_dir = os.path.expanduser("~/.ai_council/cache/cost_optimizer")
+        self._optimization_cache = diskcache.Cache(cache_dir, size_limit=100 * 1024 * 1024)
+        self.cache_ttl = 86400  # 24 hours TTL in seconds
+        
         self._performance_history: Dict[str, List[float]] = {}
         
         # Optimization weights for different execution modes
@@ -122,8 +129,8 @@ class CostOptimizer:
             confidence=best_score['confidence']
         )
         
-        # Cache the result
-        self._optimization_cache[cache_key] = result
+        # Cache the result with TTL
+        self._optimization_cache.set(cache_key, result, expire=self.cache_ttl)
         
         logger.info("Optimized model selection", extra={"model_id": best_model_id, "strategy": strategy.value})
         return result
@@ -510,8 +517,16 @@ class CostOptimizer:
     
     def get_optimization_stats(self) -> Dict[str, int]:
         """Get optimization statistics."""
-        return {
+        stats = {
             'cached_optimizations': len(self._optimization_cache),
             'models_with_history': len(self._performance_history),
             'total_history_entries': sum(len(history) for history in self._performance_history.values())
         }
+        
+        # Add diskcache specific stats if available
+        try:
+            stats['cache_volume_bytes'] = self._optimization_cache.volume()
+        except Exception:
+            pass
+            
+        return stats
