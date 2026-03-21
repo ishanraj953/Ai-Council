@@ -107,7 +107,7 @@ class BaseExecutionAgent(ExecutionAgent):
                 response_content = await self._execute_with_protection(subtask, model)
                 
                 # Generate self-assessment
-                self_assessment = self.generate_self_assessment(response_content, subtask)
+                self_assessment = await self.generate_self_assessment(response_content, subtask, model_id)
                 self_assessment.model_used = model_id
                 self_assessment.execution_time = time.time() - start_time
                 
@@ -423,12 +423,13 @@ class BaseExecutionAgent(ExecutionAgent):
         else:
             return "default"
     
-    def generate_self_assessment(self, response: str, subtask: Subtask) -> SelfAssessment:
+    async def generate_self_assessment(self, response: str, subtask: Subtask, model_id: str) -> SelfAssessment:
         """Generate a self-assessment of the agent's performance.
         
         Args:
             response: The generated response content
             subtask: The subtask that was executed
+            model_id: Identifier of the LLM model used, required for cost estimation
             
         Returns:
             SelfAssessment: Structured self-assessment metadata
@@ -442,11 +443,12 @@ class BaseExecutionAgent(ExecutionAgent):
         # Extract assumptions from the response
         assumptions = self._extract_assumptions(response, subtask)
         
-        # Estimate cost (simplified - would integrate with actual model pricing)
-        estimated_cost = self._estimate_cost(response, subtask)
+        # Estimate token usage (split into input and output)
+        token_usage_dict = self._estimate_token_usage(response, subtask)
+        token_usage = token_usage_dict["total"]
         
-        # Estimate token usage (simplified approximation)
-        token_usage = self._estimate_token_usage(response, subtask)
+        # Estimate cost based on model-specific pricing
+        estimated_cost = self._estimate_cost(response, subtask, model_id)
         
         return SelfAssessment(
             confidence_score=confidence_score,
@@ -742,24 +744,37 @@ class BaseExecutionAgent(ExecutionAgent):
         
         return defaults.get(task_type, [])
     
-    def _estimate_cost(self, response: str, subtask: Subtask) -> float:
-        """Estimate the cost of generating the response.
+    def _estimate_cost(self, response: str, subtask: Subtask, model_id: str) -> float:
+        """Estimate the cost of generating the response based on model pricing.
         
         Args:
             response: The generated response
             subtask: The subtask that was executed
+            model_id: The ID of the model used
             
         Returns:
             float: Estimated cost in USD
         """
-        # Simplified cost estimation - would integrate with actual model pricing
-        # Assume average cost per token
-        estimated_tokens = self._estimate_token_usage(response, subtask)
-        cost_per_token = 0.00002  # Example: $0.00002 per token
+        token_usage = self._estimate_token_usage(response, subtask)
         
-        return estimated_tokens * cost_per_token
+        # Use model registry to get accurate pricing
+        if self.model_registry:
+            try:
+                cost_profile = self.model_registry.get_model_cost_profile(model_id)
+                input_cost = token_usage["input"] * cost_profile.cost_per_input_token
+                output_cost = token_usage["output"] * cost_profile.cost_per_output_token
+                
+                total_cost = input_cost + output_cost
+                return max(cost_profile.minimum_cost, total_cost)
+            except (KeyError, AttributeError):
+                # Fallback to a default if model not found or registry fails
+                pass
+        
+        # Fallback to default pricing if registry is unavailable or model not found
+        cost_per_token = 0.00002
+        return token_usage["total"] * cost_per_token
     
-    def _estimate_token_usage(self, response: str, subtask: Subtask) -> int:
+    def _estimate_token_usage(self, response: str, subtask: Subtask) -> Dict[str, int]:
         """Estimate token usage for the request and response.
         
         Args:
@@ -767,13 +782,17 @@ class BaseExecutionAgent(ExecutionAgent):
             subtask: The subtask that was executed
             
         Returns:
-            int: Estimated token count
+            Dict[str, int]: Estimated token counts for input and output
         """
         # Rough approximation: 1 token ≈ 4 characters for English text
         prompt_chars = len(self._build_prompt(subtask))
         response_chars = len(response)
         
-        total_chars = prompt_chars + response_chars
-        estimated_tokens = total_chars // 4
+        input_tokens = max(1, prompt_chars // 4)
+        output_tokens = max(1, response_chars // 4)
         
-        return max(1, estimated_tokens)  # Minimum 1 token
+        return {
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": input_tokens + output_tokens
+        }
