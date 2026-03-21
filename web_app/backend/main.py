@@ -23,10 +23,6 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
-
-# Add ai_council to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from ai_council.core.models import ExecutionMode
 from ai_council.main import AICouncil
 
