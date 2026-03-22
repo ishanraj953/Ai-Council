@@ -5,7 +5,7 @@ import re
 from ai_council.core.logger import get_logger
 import asyncio
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..core.interfaces import ExecutionAgent, AIModel, ModelError, FailureResponse, ModelRegistry
 from ..core.models import Subtask, AgentResponse, SelfAssessment, RiskLevel
@@ -128,7 +128,7 @@ class BaseExecutionAgent(ExecutionAgent):
                     model_used=model_id,
                     content=response_content,
                     self_assessment=self_assessment,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     success=True,
                     metadata={
                         "attempts": attempt + 1,
@@ -378,7 +378,7 @@ class BaseExecutionAgent(ExecutionAgent):
                 execution_time=execution_time,
                 assumptions=["Subtask skipped due to system overload"]
             ),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             success=False,
             error_message="Subtask skipped due to load shedding",
             metadata={
@@ -407,7 +407,7 @@ class BaseExecutionAgent(ExecutionAgent):
                 model_used=model_id,
                 execution_time=execution_time
             ),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             success=False,
             error_message=f"Failed after {self.max_retries + 1} attempts: {error_message}",
             metadata={
@@ -465,7 +465,7 @@ class BaseExecutionAgent(ExecutionAgent):
             token_usage=token_usage,
             execution_time=0.0,  # Will be set by execute method
             model_used="",  # Will be set by execute method
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
     
     def handle_model_failure(self, error: ModelError) -> FailureResponse:

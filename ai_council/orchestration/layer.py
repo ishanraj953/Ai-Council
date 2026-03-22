@@ -383,7 +383,7 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
             
             # Stage 1: Analysis and Task Creation
             task = await self._stage_analyze_and_create_task(user_input, execution_mode)
-            execution_metadata.execution_path.append("task_creation")
+            execution_metadata.execution_path.append("analysis")
             
             # Stage 2: Cost Estimation (if required by execution mode)
             if execution_mode != ExecutionMode.FAST:
@@ -393,7 +393,7 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
             
             # Stage 3: Task Decomposition
             subtasks = await self._stage_decompose_task(task)
-            execution_metadata.execution_path.append("task_decomposition")
+            execution_metadata.execution_path.append("decomposition")
             logger.info("Decomposed into", extra={"count": len(subtasks)})
             
             # Stage 4: Execution Planning
