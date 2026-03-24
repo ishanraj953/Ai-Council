@@ -292,11 +292,12 @@ class ArbitrationLayer(ABC):
         pass
     
     @abstractmethod
-    async def resolve_contradiction(self, conflict: Conflict) -> Resolution:
+    async def resolve_contradiction(self, conflict: Conflict, responses: Optional[List[AgentResponse]] = None) -> Resolution:
         """Resolve a specific contradiction between responses.
         
         Args:
             conflict: The conflict to resolve
+            responses: Optional list of responses used to evaluate conflict
             
         Returns:
             Resolution: The resolution decision
