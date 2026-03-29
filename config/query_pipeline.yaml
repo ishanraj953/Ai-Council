@@ -1,0 +1,64 @@
+# =============================================================================
+# AI Council — Cost-Optimized Query Pipeline Configuration
+# =============================================================================
+
+query_pipeline:
+
+  # ── Embedding engine ────────────────────────────────────────────────────────
+  embedding:
+    backend: hash            # "hash" | "sentence_transformers" | "openai"
+    model_name: hash-384     # used by non-hash backends
+    dim: 384
+    cache_size: 1024         # max in-memory cached embeddings (LRU)
+
+  # ── Vector store ─────────────────────────────────────────────────────────────
+  vector_store:
+    backend: numpy           # "numpy" (default) | "faiss"
+    persist_path: "~/.ai_council/vector_store"
+    n_exemplars_per_topic: 20
+
+  # ── Model routing tiers ───────────────────────────────────────────────────────
+  # Rules are evaluated in order; the first tier whose complexity_max >= score wins.
+  # complexity_score is a 0-10 integer assigned per sub-query.
+  routing_tiers:
+    - name: cheap
+      complexity_max: 3        # complexity 0-3
+      preferred_models:
+        - gpt-3.5-turbo
+        - gemini-1.5-flash
+        - llama-3-8b
+        - claude-3-haiku
+      token_budget: 1024       # max tokens sent to model
+      fallback_tier: mid
+
+    - name: mid
+      complexity_max: 6        # complexity 4-6
+      preferred_models:
+        - gpt-4o-mini
+        - gemini-1.5-pro
+        - llama-3-70b
+        - claude-3-sonnet
+      token_budget: 2048
+      fallback_tier: expensive
+
+    - name: expensive
+      complexity_max: 10       # complexity 7-10
+      preferred_models:
+        - gpt-4o
+        - claude-3-opus
+        - gemini-1.5-ultra
+      token_budget: 4096
+      fallback_tier: null      # no further fallback
+
+  # ── Query result cache ───────────────────────────────────────────────────────
+  cache:
+    enabled: true
+    max_memory_entries: 512    # LRU cap in memory
+    ttl_seconds: 3600          # 1 hour
+    persist: false             # true requires diskcache installed
+    persist_path: "~/.ai_council/cache/query_pipeline"
+
+  # ── Pipeline-level limits ─────────────────────────────────────────────────────
+  max_sub_queries: 8
+  target_classification_ms: 50.0
+  target_pipeline_overhead_ms: 200.0
