@@ -19,6 +19,7 @@ from .core.interfaces import OrchestrationLayer
 from .utils.config import AICouncilConfig, load_config
 from .utils.logging import configure_logging, get_logger
 from .factory import AICouncilFactory
+from .sanitization import SanitizationFilter
 
 
 class AICouncil:
@@ -66,7 +67,17 @@ class AICouncil:
         
         # Initialize orchestration layer
         self.orchestration_layer: OrchestrationLayer = self.factory.create_orchestration_layer()
-        
+
+        # Initialize sanitization filter (runs before prompt construction)
+        sanitization_config = (
+            config_path.parent / "sanitization_filters.yaml"
+            if config_path is not None
+            else None
+        )
+        self.sanitization_filter: SanitizationFilter = SanitizationFilter.from_config(
+            config_path=sanitization_config
+        )
+
         self.logger.info("AI Council application initialized successfully")
     
     async def _execute_with_timeout(
@@ -114,23 +125,54 @@ class AICouncil:
             )
     
     async def process_request(
-        self, 
-        user_input: str, 
-        execution_mode: ExecutionMode = ExecutionMode.BALANCED
+        self,
+        user_input: str,
+        execution_mode: ExecutionMode = ExecutionMode.BALANCED,
+        *,
+        session_id: str = "anonymous",
     ) -> FinalResponse:
         """
         Process a user request through the AI Council system.
-        
+
+        The Sanitization Filter runs FIRST, before any prompt construction
+        or orchestration.  Injection attempts are rejected immediately.
+
         Args:
-            user_input: The user's request as a string
+            user_input:     The user's request as a string
             execution_mode: The execution mode to use (fast, balanced, best_quality)
-            
+            session_id:     Per-session key used for rate-limit tracking.
+
         Returns:
             FinalResponse: The final processed response
         """
         self.logger.info("Processing request in", extra={"value": execution_mode.value})
         self.logger.debug("User input", extra={"user_input": user_input[:200]})
-        
+
+        # ── Stage 0: Sanitization Filter ─────────────────────────────────
+        filter_result = self.sanitization_filter.check(
+            user_input, source_key=session_id
+        )
+        if not filter_result.is_safe:
+            self.logger.warning(
+                "Request blocked by SanitizationFilter",
+                extra={
+                    "session_id": session_id,
+                    "filter": filter_result.filter_name,
+                    "severity": filter_result.severity.value if filter_result.severity else None,
+                    "rule": filter_result.triggered_rule,
+                },
+            )
+            return FinalResponse(
+                content="",
+                overall_confidence=0.0,
+                success=False,
+                error_message=(
+                    "Unsafe input detected. Request blocked due to potential prompt injection."
+                ),
+                error_type="prompt_injection",
+            )
+        # ─────────────────────────────────────────────────────────────────
+
         return await self._execute_with_timeout(user_input, execution_mode)
     
     async def estimate_cost(self, user_input: str, execution_mode: ExecutionMode = ExecutionMode.BALANCED) -> Dict[str, Any]:

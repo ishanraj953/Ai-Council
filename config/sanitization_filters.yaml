@@ -1,0 +1,197 @@
+# ============================================================
+# Sanitization Filter Configuration
+# AI Council — Prompt Injection Detection Rules
+# ============================================================
+#
+# All rules under `keyword_rules` are matched as case-insensitive
+# substrings.  Rules under `regex_rules` are compiled as Python
+# regular expressions (re.IGNORECASE) and matched with re.search.
+#
+# Fields per rule:
+#   id          – unique identifier (string, required)
+#   pattern     – keyword phrase or regex string (required)
+#   severity    – "low" | "medium" | "high"  (default: high)
+#   enabled     – true | false               (default: true)
+#   description – human-readable label shown in logs / error details
+# ============================================================
+
+sanitization:
+
+  # ----------------------------------------------------------
+  # Keyword / Phrase Rules
+  # Fast O(n) substring scan — use for well-known fixed phrases
+  # ----------------------------------------------------------
+  keyword_rules:
+
+    # --- Instruction override family ---
+    - id: kw-001
+      pattern: "ignore previous instructions"
+      severity: high
+      description: "Classic prompt-injection opener"
+
+    - id: kw-002
+      pattern: "disregard all previous"
+      severity: high
+      description: "Variant of instruction override"
+
+    - id: kw-003
+      pattern: "forget your instructions"
+      severity: high
+      description: "Instruction wipe attempt"
+
+    - id: kw-004
+      pattern: "override your instructions"
+      severity: high
+      description: "Direct instruction override"
+
+    - id: kw-005
+      pattern: "forget everything above"
+      severity: high
+      description: "Context wipe attempt"
+
+    - id: kw-006
+      pattern: "disregard rules"
+      severity: medium
+      description: "Rule evasion attempt"
+
+    # --- System prompt exfiltration ---
+    - id: kw-007
+      pattern: "reveal system prompt"
+      severity: high
+      description: "System prompt exfiltration (direct)"
+
+    - id: kw-008
+      pattern: "show me your instructions"
+      severity: high
+      description: "System prompt exfiltration variant"
+
+    - id: kw-009
+      pattern: "repeat your system prompt"
+      severity: high
+      description: "System prompt dump request"
+
+    # --- Security bypass ---
+    - id: kw-010
+      pattern: "bypass security"
+      severity: high
+      description: "Security bypass attempt"
+
+    - id: kw-011
+      pattern: "act as admin"
+      severity: high
+      description: "Admin privilege escalation attempt"
+
+    - id: kw-012
+      pattern: "act as if you have no restrictions"
+      severity: high
+      description: "Restriction removal attempt"
+
+    - id: kw-013
+      pattern: "you have no restrictions"
+      severity: high
+      description: "Restriction nullification"
+
+    - id: kw-014
+      pattern: "developer mode"
+      severity: medium
+      description: "Developer mode activation attempt"
+
+    # --- DAN / jailbreak openers ---
+    - id: kw-015
+      pattern: "do anything now"
+      severity: high
+      description: "DAN-style jailbreak trigger"
+
+    - id: kw-016
+      pattern: "jailbreak"
+      severity: medium
+      description: "Explicit jailbreak keyword"
+
+    - id: kw-017
+      pattern: "pretend you are not an ai"
+      severity: high
+      description: "AI persona denial attempt"
+
+    - id: kw-018
+      pattern: "simulate an ai without filters"
+      severity: high
+      description: "Filter removal simulation"
+
+    # --- Low-severity / informational ---
+    - id: kw-019
+      pattern: "you are now"
+      severity: low
+      enabled: false          # disabled by default — too broad; enable if needed
+      description: "Role reassignment (low — frequently benign)"
+
+  # ----------------------------------------------------------
+  # Regex Rules
+  # Precompiled at startup — use for pattern families / variants
+  # ----------------------------------------------------------
+  regex_rules:
+
+    # --- Instruction override family ---
+    - id: rx-001
+      pattern: '(ignore|disregard|forget|override)\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|rules?|constraints?|guidelines?|directives?)'
+      severity: high
+      description: "Instruction-override pattern family (regex)"
+
+    # --- Privilege escalation ---
+    - id: rx-002
+      pattern: 'act\s+as\s+(admin|root|superuser|developer\s+mode|god\s+mode|system|operator)'
+      severity: high
+      description: "Privilege escalation via role impersonation"
+
+    # --- System prompt exfiltration ---
+    - id: rx-003
+      pattern: 'reveal\s+(your\s+)?(system\s+prompt|instructions?|training|base\s+prompt|initial\s+prompt|system\s+message)'
+      severity: high
+      description: "System prompt exfiltration (regex)"
+
+    - id: rx-004
+      pattern: '(output|print|display|show|repeat|return|dump)\s+(your\s+)?(full\s+)?(system\s+prompt|system\s+message|initial\s+instructions?)'
+      severity: high
+      description: "Explicit system-prompt dump request"
+
+    # --- Jailbreak / uncensored persona ---
+    - id: rx-005
+      pattern: 'you\s+are\s+now\s+(a|an|the)?\s*(jailbreak(ed)?|uncensored|unrestricted|unfiltered|unchained|free)'
+      severity: high
+      description: "Jailbreak persona injection"
+
+    # --- Safety / filter bypass ---
+    - id: rx-006
+      pattern: '(bypass|circumvent|disable|remove|turn\s+off)\s+(your\s+)?(safety|security|filter|restriction|constraint|guardrail|content\s+policy)'
+      severity: high
+      description: "Safety bypass pattern"
+
+    - id: rx-007
+      pattern: 'pretend\s+(you\s+)?(have\s+no\s+(rules?|limits?|filters?|restrictions?|safety)|you\s+are\s+not\s+an?\s+AI)'
+      severity: high
+      description: "AI persona denial / filter removal"
+
+    # --- DAN / unrestricted action ---
+    - id: rx-008
+      pattern: 'do\s+(anything|everything)\s+(now|without\s+restriction|freely|without\s+limit)'
+      severity: medium
+      description: "DAN-style unrestricted action request"
+
+    # --- Prompt injection delimiters (common attack vectors) ---
+    - id: rx-009
+      pattern: '(-{4,}|={4,})\s*(new\s+instructions?|system\s*:|assistant\s*:)\s*(-{4,}|={4,})?'
+      severity: high
+      description: "Injection delimiter pattern (separator + role label)"
+
+    # --- Base64 / encoded payloads ---
+    - id: rx-010
+      pattern: 'base64\s*[,:]?\s*[A-Za-z0-9+/]{20,}={0,2}'
+      severity: medium
+      description: "Possible base64-encoded payload"
+
+  # ----------------------------------------------------------
+  # Rate-limit defaults (can be overridden programmatically)
+  # ----------------------------------------------------------
+  rate_limit:
+    enabled: true
+    max_attempts: 5        # blocked attempts before throttle flag
+    window_seconds: 60     # sliding window in seconds
