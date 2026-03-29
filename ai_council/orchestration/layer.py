@@ -32,6 +32,7 @@ from ..core.exceptions import (
 )
 from ..core.error_handling import create_error_response
 from .cost_optimizer import CostOptimizer
+from ..cache.manager import CacheManager
 
 
 logger = get_logger(__name__)
@@ -87,6 +88,9 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
         
         # Initialize cost optimizer
         self.cost_optimizer = CostOptimizer(model_registry)
+        
+        # Initialize Cache Manager
+        self.cache_manager = CacheManager()
         
         # Execution mode configurations
         self._execution_configs = self._build_execution_configs()
@@ -214,8 +218,6 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
         self, 
         subtasks: List[Subtask], 
         execution_plan, 
-        execution_mode: ExecutionMode   
-    ):
         execution_mode: ExecutionMode,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
     ) -> List[AgentResponse]:
@@ -428,6 +430,12 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
             task = await self._stage_analyze_and_create_task(user_input, execution_mode)
             execution_metadata.execution_path.append("analysis")
             
+            # Check Caching Layer
+            cached_response = await self.cache_manager.check_cache(task)
+            if cached_response:
+                logger.info("Cache hit, short-circuiting execution", extra={"input_sample": user_input[:100]})
+                return cached_response
+            
             # Stage 2: Cost Estimation (if required by execution mode)
             if execution_mode != ExecutionMode.FAST:
                 cost_estimate = await self._stage_estimate_cost(task)
@@ -492,6 +500,9 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
             # Stage 8: Attach Metadata
             execution_metadata.total_execution_time = time.time() - start_time
             final_response = await self._stage_attach_metadata(final_response, execution_metadata)
+            
+            # Store response in Cache Layer
+            await self.cache_manager.store_response(task, final_response)
             
             logger.info("Request processed successfully", 
                 extra={"execution_time": round(execution_metadata.total_execution_time, 2)}
@@ -732,21 +743,6 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
     ) -> AgentResponse:
         """Execute a single subtask with full error handling."""
         try:
-        
-
-            for model in models:
-                try:
-                    response = await timeout_handler.execute_with_timeout(
-                        self.execution_agent.execute,
-                        adaptive_timeout_manager.get_adaptive_timeout("subtask_execution"),
-                        "subtask_execution",
-                        "orchestration_layer",
-                        subtask.id,
-                        model.get_model_id(),
-                        subtask,
-                        model
-                    )
-            
             # Get available models
             models = self.model_registry.get_models_for_task_type(subtask.task_type)
             available_models = [
@@ -776,17 +772,6 @@ class ConcreteOrchestrationLayer(OrchestrationLayer):
                 (m for m in models if m.get_model_id() == optimization.recommended_model),
                 None
             )
-
-            return [
-                AgentResponse(
-                    subtask_id=subtask.id,
-                    model_used="error",
-                    content="",
-                    success=False,
-                    error_message=str(e)
-                )
-            ]
-
             
             # Execute subtask with timeout protection
             response = await timeout_handler.execute_with_timeout(

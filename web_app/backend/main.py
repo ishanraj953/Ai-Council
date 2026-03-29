@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import time
+import uuid
+import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Set
@@ -361,9 +363,8 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 class WebSocketManager:
     def __init__(self):
         self.active_sockets: Set[WebSocket] = set()
-        self.ip_connections: Dict[str, int] = {}
-        self.message_timestamps: Dict[WebSocket, List[float]] = {}
-        self.active_connections = 0
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.redis = redis.from_url(redis_url, decode_responses=True)
 
         self.MAX_CONNECTIONS = 1000
         self.MAX_IP_CONNECTIONS = 10
@@ -394,41 +395,55 @@ class WebSocketManager:
         except jwt.PyJWTError:
             return False
 
-    def connect(self, websocket: WebSocket, client_ip: str) -> bool:
-        if len(self.active_sockets) >= self.MAX_CONNECTIONS:
+    async def connect(self, websocket: WebSocket, client_ip: str) -> bool:
+        current_active = await self.redis.incr("ai_council:ws:active_connections")
+        if current_active > self.MAX_CONNECTIONS:
+            await self.redis.decr("ai_council:ws:active_connections")
             return False
         
-        current_ip_count = self.ip_connections.get(client_ip, 0)
-        if current_ip_count >= self.MAX_IP_CONNECTIONS:
+        current_ip_count = await self.redis.incr(f"ai_council:ws:ip:{client_ip}")
+        if current_ip_count > self.MAX_IP_CONNECTIONS:
+            await self.redis.decr("ai_council:ws:active_connections")
+            await self.redis.decr(f"ai_council:ws:ip:{client_ip}")
             return False
 
         self.active_sockets.add(websocket)
-        self.ip_connections[client_ip] = current_ip_count + 1
-        self.message_timestamps[websocket] = []
+        if not hasattr(websocket.state, "conn_id"):
+            websocket.state.conn_id = str(uuid.uuid4())
+            
         return True
 
-    def disconnect(self, websocket: WebSocket, client_ip: str):
+    async def disconnect(self, websocket: WebSocket, client_ip: str):
         self.active_sockets.discard(websocket)
-        if websocket in self.message_timestamps:
-            del self.message_timestamps[websocket]
-            self.active_connections = max(0, self.active_connections - 1)
-            if client_ip in self.ip_connections:
-                self.ip_connections[client_ip] = max(0, self.ip_connections[client_ip] - 1)
-                if self.ip_connections[client_ip] == 0:
-                    del self.ip_connections[client_ip]
-
-    def check_rate_limit(self, websocket: WebSocket) -> bool:
-        """Returns True if limits are exceeded."""
-        now = time.time()
-        timestamps = self.message_timestamps.get(websocket, [])
-        timestamps = [ts for ts in timestamps if now - ts < self.RATE_LIMIT_WINDOW]
         
-        if len(timestamps) >= self.RATE_LIMIT_MESSAGES:
-            self.message_timestamps[websocket] = timestamps
+        active = await self.redis.decr("ai_council:ws:active_connections")
+        if active < 0:
+            await self.redis.set("ai_council:ws:active_connections", 0)
+            
+        ip_count = await self.redis.decr(f"ai_council:ws:ip:{client_ip}")
+        if ip_count < 0:
+            await self.redis.set(f"ai_council:ws:ip:{client_ip}", 0)
+
+        if hasattr(websocket.state, "conn_id"):
+            await self.redis.delete(f"ai_council:ws:rate:{websocket.state.conn_id}")
+
+    async def check_rate_limit(self, websocket: WebSocket) -> bool:
+        """Returns True if limits are exceeded."""
+        conn_id = getattr(websocket.state, "conn_id", "unknown")
+        key = f"ai_council:ws:rate:{conn_id}"
+        now = time.time()
+        
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.zadd(key, {str(now): now})
+            pipe.zremrangebyscore(key, "-inf", now - self.RATE_LIMIT_WINDOW)
+            pipe.zcard(key)
+            pipe.expire(key, self.RATE_LIMIT_WINDOW)
+            results = await pipe.execute()
+            
+        count = results[2]
+        if count > self.RATE_LIMIT_MESSAGES:
             return True
             
-        timestamps.append(now)
-        self.message_timestamps[websocket] = timestamps
         return False
 
     async def close_all(self):
@@ -474,7 +489,7 @@ async def websocket_endpoint(websocket: WebSocket):
     client = websocket.client
     client_ip = client.host if client else "unknown"
 
-    if not ws_manager.connect(websocket, client_ip):
+    if not await ws_manager.connect(websocket, client_ip):
         await websocket.close(code=1008, reason="Connection limit exceeded")
         return
 
@@ -498,7 +513,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     pass
                 break
 
-            if ws_manager.check_rate_limit(websocket):
+            if await ws_manager.check_rate_limit(websocket):
                 await websocket.send_json({"type": "error", "message": "Rate limit exceeded. Please wait."})
                 await websocket.close(code=1008, reason="Rate limit exceeded")
                 break
@@ -552,7 +567,7 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             pass
     finally:
-        ws_manager.disconnect(websocket, client_ip)
+        await ws_manager.disconnect(websocket, client_ip)
 
 
 if __name__ == "__main__":
